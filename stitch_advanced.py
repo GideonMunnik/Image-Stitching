@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 
+from homography_snapshot import warp_with_balance
+
 
 class AdvancedStitcher:
     """Feature-based stitcher that refreshes the homography every N frames."""
@@ -16,6 +18,7 @@ class AdvancedStitcher:
         matcher_type: str = "BF",
         use_optical_flow: bool = False,
         stability: float = 0.0,
+        balance_mode: int = 2,
     ):
         self.feature_interval = max(1, int(feature_interval))
         self.max_features = max_features
@@ -26,6 +29,7 @@ class AdvancedStitcher:
         self.matcher_type = matcher_type.upper()
         self.use_optical_flow = bool(use_optical_flow)
         self.stability = float(min(1.0, max(0.0, stability)))
+        self.balance_mode = int(np.clip(balance_mode, 0, 2))
 
         self.frame_count = 0
         self.homography = None
@@ -341,35 +345,7 @@ class AdvancedStitcher:
         return img[:, x0:x1], (x0, 0)
 
     def _warp_and_blend(self, left, right, H):
-        hA, wA = left.shape[:2]
-        hB, wB = right.shape[:2]
-
-        cornersB = np.float32([[0, 0], [0, hB], [wB, hB], [wB, 0]]).reshape(-1, 1, 2)
-        cornersA = np.float32([[0, 0], [0, hA], [wA, hA], [wA, 0]]).reshape(-1, 1, 2)
-        warped_cornersB = cv2.perspectiveTransform(cornersB, H)
-        all_corners = np.vstack((warped_cornersB, cornersA))
-
-        [x_min, y_min] = np.int32(all_corners.min(axis=0).ravel() - 0.5)
-        [x_max, y_max] = np.int32(all_corners.max(axis=0).ravel() + 0.5)
-        translate = [-x_min, -y_min]
-        translation_mat = np.array([[1, 0, translate[0]], [0, 1, translate[1]], [0, 0, 1]])
-
-        out_width = x_max - x_min
-        out_height = y_max - y_min
-        warp_right = cv2.warpPerspective(right, translation_mat @ H, (out_width, out_height))
-        mask_right = cv2.warpPerspective(np.ones((hB, wB), dtype=np.uint8), translation_mat @ H, (out_width, out_height))
-
-        result = np.zeros_like(warp_right)
-        mask_left = np.zeros((out_height, out_width), dtype=np.uint8)
-        y_off, x_off = translate[1], translate[0]
-        result[y_off : y_off + hA, x_off : x_off + wA] = left
-        mask_left[y_off : y_off + hA, x_off : x_off + wA] = 1
-
-        only_right = (mask_left == 0) & (mask_right == 1)
-        overlap = (mask_left == 1) & (mask_right == 1)
-
-        result[only_right] = warp_right[only_right]
-        if overlap.any():
-            result[overlap] = cv2.addWeighted(result[overlap], 0.5, warp_right[overlap], 0.5, 0)
-
-        return result
+        try:
+            return warp_with_balance(left, right, H, self.balance_mode)
+        except RuntimeError:
+            return warp_with_balance(left, right, H, 2)

@@ -32,9 +32,13 @@ Note: If `SIFT` is unavailable in your OpenCV build, it will fall back to `ORB`.
 
 ## Controls
 - `q` or `ESC`: quit.
-- `space`: toggle homography.
-- `r`: reset homography.
-- Trackbars inside the OpenCV window let you adjust overlap, toggle homography/optical flow, and tune feature settings on the fly.
+- `space`: toggle homography mode via the trackbar.
+- `r`: reset the advanced stitcher (drops cached homography/flow state).
+- `w`: capture the first frame of each video, compute a calibration homography, save `homography_sample.png`, and enter **Calibrated** mode.
+- `a`: switch to **Calibrated** mode (if a calibration exists).
+- `s`: switch to **Basic** mode (homography off, calibration off).
+- `d`: switch to **Homography** mode (live feature tracking).
+- Trackbars inside the OpenCV window let you adjust overlap, toggle homography/optical flow, tune feature settings, and set the `Balance` slider (0 = warp left, 1 = warp both, 2 = warp right). In Calibrated mode the current balance is respected for the static warp.
 
 ## Extra performance tips
 - Keep input resolution modest (`--width/--height`) to reduce the warp cost.

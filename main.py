@@ -2,7 +2,7 @@ import argparse
 import cv2
 import numpy as np
 
-from homography_snapshot import save_initial_homography_sample, warp_with_homography
+from homography_snapshot import save_initial_homography_sample, warp_with_balance
 from stitch_advanced import AdvancedStitcher
 from stitch_basic import stitch_basic
 from video_source import VideoStreamPair
@@ -117,6 +117,8 @@ def main():
     )
     cv2.createTrackbar("Detector", window, detector_index, len(detector_choices) - 1, lambda x: None)
     cv2.createTrackbar("Matcher", window, matcher_index, len(matcher_choices) - 1, lambda x: None)
+    cv2.createTrackbar("Balance", window, 2, 2, lambda x: None)
+    balance_labels = {0: "LEFT", 1: "BOTH", 2: "RIGHT"}
     print("Controls: q/ESC to quit, space to toggle homography, r to reset homography.")
 
     last_detector = stitcher.detector_type
@@ -140,6 +142,8 @@ def main():
         stitcher.good_match_percent = np.clip(cv2.getTrackbarPos("Good match %", window) / 100.0, 0.05, 0.5)
         stitcher.stability = np.clip(cv2.getTrackbarPos("Stability %", window) / 100.0, 0.0, 1.0)
         stitcher.use_optical_flow = cv2.getTrackbarPos("Optical Flow", window) == 1
+        balance_mode = int(np.clip(cv2.getTrackbarPos("Balance", window), 0, 2))
+        stitcher.balance_mode = balance_mode
 
         detector_choice = detector_choices[cv2.getTrackbarPos("Detector", window)]
         matcher_choice = matcher_choices[cv2.getTrackbarPos("Matcher", window)]
@@ -160,7 +164,7 @@ def main():
 
         if calibrated_active:
             try:
-                stitched = warp_with_homography(left, right, calibrated_result["homography"])
+                stitched = warp_with_balance(left, right, calibrated_result["homography"], balance_mode)
             except RuntimeError as exc:
                 print(f"[calibrated] {exc}")
                 calibrated_mode = False
@@ -184,6 +188,7 @@ def main():
                     f"Inliers: {calibrated_result['inliers']}"
                 ),
                 f"ROI: {int(calibrated_result['roi_fraction'] * 100)}% | Sample: {calibrated_result['output_path']}",
+                f"Balance: {balance_labels.get(balance_mode, balance_mode)}",
             ]
         else:
             lines = [
@@ -214,6 +219,7 @@ def main():
                     f"good match {int(stitcher.good_match_percent*100)}% | "
                     f"stability {int(stitcher.stability*100)}%"
                 )
+                lines.append(f"Balance: {balance_labels.get(balance_mode, balance_mode)}")
                 detector_used = debug.get("detector", stitcher.detector_type)
                 matcher_used = debug.get("matcher", stitcher.matcher_type)
                 if detector_used != stitcher.detector_type:
@@ -256,15 +262,23 @@ def main():
             print("Switched to HOMOGRAPHY mode.")
         if key == ord("w"):
             try:
-                info = save_initial_homography_sample(args.left_video, args.right_video)
+                info = save_initial_homography_sample(
+                    args.left_video,
+                    args.right_video,
+                    balance_mode=balance_mode,
+                )
                 calibrated_mode = True
                 calibrated_result = info
                 print(
-                    "Calibrated snapshot saved to {path} | matches {used}/{total} | inliers {inliers}".format(
+                    (
+                        "Calibrated snapshot saved to {path} | matches {used}/{total} | "
+                        "inliers {inliers} | balance {balance}"
+                    ).format(
                         path=info["output_path"],
                         used=info["used_matches"],
                         total=info["total_matches"],
                         inliers=info["inliers"],
+                        balance=balance_labels.get(balance_mode, balance_mode),
                     )
                 )
             except RuntimeError as exc:
