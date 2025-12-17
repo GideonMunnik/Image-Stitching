@@ -2,10 +2,13 @@ import argparse
 import cv2
 import numpy as np
 
+from homography_snapshot import save_initial_homography_sample, warp_with_homography
 from stitch_advanced import AdvancedStitcher
 from stitch_basic import stitch_basic
 from video_source import VideoStreamPair
 
+left_video = "left.mp4"
+right_video = "right.mp4"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Image stitching demo (basic vs advanced).")
@@ -118,6 +121,8 @@ def main():
 
     last_detector = stitcher.detector_type
     last_matcher = stitcher.matcher_type
+    calibrated_mode = False
+    calibrated_result = None
 
     while True:
         try:
@@ -147,55 +152,81 @@ def main():
 
         stitched = None
         debug = {}
-        if homography_on:
-            stitched, debug = stitcher.stitch(left, right)
-            if stitched is None:
-                stitched = stitch_basic(left, right, overlap)
-                debug = {"homography_found": False}
-        else:
-            stitched = stitch_basic(left, right, overlap)
+        calibrated_active = (
+            calibrated_mode
+            and calibrated_result is not None
+            and calibrated_result.get("homography") is not None
+        )
 
-        lines = [
-            f"Mode: {'HOMOGRAPHY' if homography_on else 'BASIC'}",
-            f"Overlap: {int(overlap * 100)}%",
-            f"Feature interval: {stitcher.feature_interval} frames",
-        ]
-        if homography_on and debug:
-            if "matches" in debug:
-                lines.append(f"Matches: {debug.get('matches', 0)} | Inliers: {debug.get('inliers', 0)}")
-            if debug.get("flow_used") or debug.get("flow_failed"):
+        if calibrated_active:
+            try:
+                stitched = warp_with_homography(left, right, calibrated_result["homography"])
+            except RuntimeError as exc:
+                print(f"[calibrated] {exc}")
+                calibrated_mode = False
+                calibrated_result = None
+                continue
+        else:
+            if homography_on:
+                stitched, debug = stitcher.stitch(left, right)
+                if stitched is None:
+                    stitched = stitch_basic(left, right, overlap)
+                    debug = {"homography_found": False}
+            else:
+                stitched = stitch_basic(left, right, overlap)
+
+        if calibrated_active:
+            lines = [
+                "Mode: CALIBRATED",
+                (
+                    "Calib matches: "
+                    f"{calibrated_result['used_matches']}/{calibrated_result['total_matches']} | "
+                    f"Inliers: {calibrated_result['inliers']}"
+                ),
+                f"ROI: {int(calibrated_result['roi_fraction'] * 100)}% | Sample: {calibrated_result['output_path']}",
+            ]
+        else:
+            lines = [
+                f"Mode: {'HOMOGRAPHY' if homography_on else 'BASIC'}",
+                f"Overlap: {int(overlap * 100)}%",
+                f"Feature interval: {stitcher.feature_interval} frames",
+            ]
+            if homography_on and debug:
+                if "matches" in debug:
+                    lines.append(f"Matches: {debug.get('matches', 0)} | Inliers: {debug.get('inliers', 0)}")
+                if debug.get("flow_used") or debug.get("flow_failed"):
+                    lines.append(
+                        f"Flow tracked: {debug.get('flow_tracked', 0)} | Inliers: {debug.get('flow_inliers', 0)}"
+                    )
+                if not debug.get("homography_found", True):
+                    lines.append("Homography not found - falling back")
+                elif debug.get("recomputed"):
+                    lines.append("Homography refreshed")
+                if debug.get("recompute_failed_kept_previous"):
+                    lines.append("Recalc failed - using previous homography")
+                if debug.get("flow_failed"):
+                    lines.append("Flow failed - using previous homography")
                 lines.append(
-                    f"Flow tracked: {debug.get('flow_tracked', 0)} | Inliers: {debug.get('flow_inliers', 0)}"
+                    "ROI "
+                    f"{int(stitcher.roi_fraction*100)}% band | "
+                    f"detect scale {stitcher.detect_downscale:.2f} | "
+                    f"cap {stitcher.max_features} | "
+                    f"good match {int(stitcher.good_match_percent*100)}% | "
+                    f"stability {int(stitcher.stability*100)}%"
                 )
-            if not debug.get("homography_found", True):
-                lines.append("Homography not found - falling back")
-            elif debug.get("recomputed"):
-                lines.append("Homography refreshed")
-            if debug.get("recompute_failed_kept_previous"):
-                lines.append("Recalc failed - using previous homography")
-            if debug.get("flow_failed"):
-                lines.append("Flow failed - using previous homography")
-            lines.append(
-                "ROI "
-                f"{int(stitcher.roi_fraction*100)}% band | "
-                f"detect scale {stitcher.detect_downscale:.2f} | "
-                f"cap {stitcher.max_features} | "
-                f"good match {int(stitcher.good_match_percent*100)}% | "
-                f"stability {int(stitcher.stability*100)}%"
-            )
-            detector_used = debug.get("detector", stitcher.detector_type)
-            matcher_used = debug.get("matcher", stitcher.matcher_type)
-            if detector_used != stitcher.detector_type:
-                detector_label = f"{stitcher.detector_type} -> {detector_used}"
-            else:
-                detector_label = stitcher.detector_type
-            if matcher_used != stitcher.matcher_type:
-                matcher_label = f"{stitcher.matcher_type} -> {matcher_used}"
-            else:
-                matcher_label = stitcher.matcher_type
-            lines.append(
-                f"Detector: {detector_label} | Matcher: {matcher_label} | Update: {debug.get('update_source', 'reuse')}"
-            )
+                detector_used = debug.get("detector", stitcher.detector_type)
+                matcher_used = debug.get("matcher", stitcher.matcher_type)
+                if detector_used != stitcher.detector_type:
+                    detector_label = f"{stitcher.detector_type} -> {detector_used}"
+                else:
+                    detector_label = stitcher.detector_type
+                if matcher_used != stitcher.matcher_type:
+                    matcher_label = f"{stitcher.matcher_type} -> {matcher_used}"
+                else:
+                    matcher_label = stitcher.matcher_type
+                lines.append(
+                    f"Detector: {detector_label} | Matcher: {matcher_label} | Update: {debug.get('update_source', 'reuse')}"
+                )
 
         display = overlay_text(stitched.copy(), lines)
         cv2.imshow(window, display)
@@ -209,6 +240,37 @@ def main():
         if key == ord("r"):
             stitcher.reset_state(reset_frame_count=True)
             print("Homography reset.")
+        if key == ord("a"):
+            if calibrated_result and calibrated_result.get("homography") is not None:
+                calibrated_mode = True
+                print("Calibrated mode enabled.")
+            else:
+                print("No calibration available. Press 'w' to capture one first.")
+        if key == ord("s"):
+            calibrated_mode = False
+            cv2.setTrackbarPos("Homography", window, 0)
+            print("Switched to BASIC mode.")
+        if key == ord("d"):
+            calibrated_mode = False
+            cv2.setTrackbarPos("Homography", window, 1)
+            print("Switched to HOMOGRAPHY mode.")
+        if key == ord("w"):
+            try:
+                info = save_initial_homography_sample(args.left_video, args.right_video)
+                calibrated_mode = True
+                calibrated_result = info
+                print(
+                    "Calibrated snapshot saved to {path} | matches {used}/{total} | inliers {inliers}".format(
+                        path=info["output_path"],
+                        used=info["used_matches"],
+                        total=info["total_matches"],
+                        inliers=info["inliers"],
+                    )
+                )
+            except RuntimeError as exc:
+                print(f"[snapshot] {exc}")
+                calibrated_mode = False
+                calibrated_result = None
 
     stream.release()
     cv2.destroyAllWindows()
