@@ -86,6 +86,9 @@ def main():
         if key in (ord("q"), 27):
             break
 
+        if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            break
+
         try:
             current_left, current_right = stream.read()
         except RuntimeError as exc:
